@@ -5,7 +5,11 @@
 #include <librealsense2/h/rs_frame.h>
 
 #define SDL_MAIN_HANDLED
+#ifdef WIN32
 #include <SDL.h>
+#else
+#include <SDL2/SDL.h>
+#endif
 
 #include <stdint.h>
 #include <stdio.h>
@@ -230,7 +234,8 @@ int8_t init_streaming(struct RS_State* s)
         return 1;
     }
 
-    for (int sensor = 0; sensor < s->sensor_list_count; sensor++)
+    int sensor;
+    for (sensor = 0; sensor < s->sensor_list_count; sensor++)
     {
         rs2_sensor* sen = rs2_create_sensor(s->sensor_list, sensor, &e);
 
@@ -522,7 +527,8 @@ int8_t update(struct RS_State* rs_state, uint16_t* dep, struct RGBA* dep_rgb, st
     uint16_t* dbuf = NULL;
     uint8_t* col_buf;
 
-    for (int f = 0; f < num_frames; f++)
+    int f;
+    for (f = 0; f < num_frames; f++)
     {
         rs2_frame* fr = rs2_extract_frame(frames, f, &e);
         if (check_error(e) != 0) {
