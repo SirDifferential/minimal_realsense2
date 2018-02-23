@@ -96,7 +96,8 @@ int8_t clear_state(struct RS_State* s)
         rs2_delete_device(s->dev);
     }
 
-    for (int32_t sen = 0; sen < s->sensors_created; sen++) {
+    int32_t sen;
+    for (sen = 0; sen < s->sensors_created; sen++) {
         rs2_delete_sensor(s->sensors[sen]);
     }
 
