@@ -720,14 +720,14 @@ int8_t setPreset(const char* new_preset, struct RS_State* rs_state)
 }
 
 #ifdef WIN32
-bool sigint_handler(DWORD fdwCtrlType) {
+int8_t sigint_handler(DWORD fdwCtrlType) {
     if(fdwCtrlType == CTRL_C_EVENT) {
         fprintf(stderr, "got signal: %d\n", fdwCtrlType);
         got_sigint = 1;
-        return true;
+        return 0;
     }
 
-    return false;
+    return 1;
 }
 #else
 void sigint_handler(int sig)
