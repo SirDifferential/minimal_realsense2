@@ -44,6 +44,7 @@ struct RGBA
     uint8_t a;
 };
 
+#define RS_STATE_SENSORS_MAX 20
 struct RS_State
 {
     rs2_context* ctx;
@@ -52,6 +53,8 @@ struct RS_State
     rs2_device* dev;
     rs2_sensor_list* sensor_list;
     int32_t sensor_list_count;
+    rs2_sensor* sensors[RS_STATE_SENSORS_MAX];
+    int32_t sensors_created;
     int32_t advanced_enabled;
     rs2_pipeline* pipe;
     rs2_pipeline_profile* selection;
@@ -93,6 +96,10 @@ int8_t clear_state(struct RS_State* s)
         rs2_delete_device(s->dev);
     }
 
+    for (int32_t sen = 0; sen < s->sensors_created; sen++) {
+        rs2_delete_sensor(s->sensors[sen]);
+    }
+
     if (s->sensor_list) {
         rs2_delete_sensor_list(s->sensor_list);
     }
@@ -119,6 +126,85 @@ int8_t clear_state(struct RS_State* s)
     }
 
     memset(s, 0, sizeof(struct RS_State));
+    return 0;
+}
+
+int8_t create_device_sensors(struct RS_State* s)
+{
+    rs2_error* e = NULL;
+
+    if (s == NULL) {
+        fprintf(stderr, "Cannot create device sensors: given pointer is null\n");
+        return 1;
+    }
+
+    s->sensor_list = rs2_query_sensors(s->dev, &e);
+    if (check_error(e) != 0) {
+        fprintf(stderr, "Failed getting sensors for device\n");
+        s->sensor_list = NULL;
+        return 1;
+    }
+
+    s->sensor_list_count = rs2_get_sensors_count(s->sensor_list, &e);
+    if (check_error(e) != 0) {
+        fprintf(stderr, "Failed getting sensor list count\n");
+        s->sensor_list_count = 0;
+        return 1;
+    }
+
+    int sensor;
+    for (sensor = 0; sensor < s->sensor_list_count && sensor < RS_STATE_SENSORS_MAX; sensor++)
+    {
+        rs2_sensor* sen = rs2_create_sensor(s->sensor_list, sensor, &e);
+
+        if (check_error(e) != 0) {
+            fprintf(stderr, "Failed creating temp sensor object %d / %d\n", sensor, s->sensor_list_count);
+            return 1;
+        }
+
+        s->sensors[s->sensors_created] = sen;
+        s->sensors_created++;
+
+        // This cast is done as the types are opaque and defined in the C++ API
+        // Apparently simply doing this cast is the expected way to do this, says Intel
+        int supports = rs2_supports_option((const rs2_options*)sen, RS2_OPTION_LASER_POWER, &e);
+
+        if (check_error(e) != 0) {
+            fprintf(stderr, "Failed asking if sensor supports LASER POWER\n");
+            return 1;
+        }
+
+        if (supports == 1) {
+            float min, max, step, def;
+            rs2_get_option_range((const rs2_options*)sen, RS2_OPTION_LASER_POWER, &min, &max, &step, &def, &e);
+            if (check_error(e) != 0) {
+                fprintf(stderr, "Failed getting RS2_OPTION_LASER_POWER ranges\n");
+                return 1;
+            }
+
+            rs2_set_option((const rs2_options*)sen, RS2_OPTION_LASER_POWER, max, &e);
+            if (check_error(e) != 0) {
+                fprintf(stderr, "Failed setting RS2_OPTION_LASER_POWER to %f\n", max);
+                return 1;
+            }
+        }
+
+        supports = rs2_supports_option((const rs2_options*)sen, RS2_OPTION_FRAMES_QUEUE_SIZE, &e);
+        if (check_error(e) != 0) {
+            fprintf(stderr, "Failed asking if sensor supports LASER RS2_OPTION_FRAMES_QUEUE_SIZE\n");
+            return 1;
+        }
+
+        if (supports == 1)
+        {
+            rs2_set_option((const rs2_options*)sen, RS2_OPTION_FRAMES_QUEUE_SIZE, 0, &e);
+            if (check_error(e) != 0) {
+                fprintf(stderr, "Failed setting RS2_OPTION_FRAMES_QUEUE_SIZE to 0\n");
+                return 1;
+            }
+        }
+    }
+
     return 0;
 }
 
@@ -164,10 +250,107 @@ int8_t init_state(struct RS_State* s, int rs_dev_index)
         return 1;
     }
 
+    if (create_device_sensors(s) != 0) {
+        fprintf(stderr, "Failed creating device sensors\n");
+        return 1;
+    }
+
     return 0;
 }
 
-int8_t init_streaming(struct RS_State* s)
+int8_t set_preset(struct RS_State* s, const char* new_preset)
+{
+    int done = 0;
+    int sensor;
+    rs2_error* e = NULL;
+
+    for (sensor = 0; sensor < s->sensor_list_count && sensor < s->sensors_created; sensor++)
+    {
+        rs2_sensor* sen = s->sensors[sensor];
+        int supports = rs2_supports_option((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, &e);
+
+        if (check_error(e) != 0) {
+            fprintf(stderr, "Failed asking if sensor supports RS2_OPTION_VISUAL_PRESET\n");
+            return 1;
+        }
+
+        if (supports == 1)
+        {
+            float pres = rs2_get_option((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, &e);
+            if (check_error(e) != 0) {
+                fprintf(stderr, "Failed getting RS2_OPTION_VISUAL_PRESET\n");
+                return 1;
+            }
+
+            const char* preset_desc = rs2_get_option_value_description((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, pres, &e);
+            if (check_error(e) != 0) {
+                fprintf(stderr, "Failed getting RS2_OPTION_VISUAL_PRESET description\n");
+                return 1;
+            }
+
+            if (strcmp(preset_desc, new_preset) == 0)
+            {
+                fprintf(stderr, "already using preset: %s\n", preset_desc);
+                done = 1;
+                continue;
+            }
+
+            float min, max, step, def;
+            rs2_get_option_range((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, &min, &max, &step, &def, &e);
+            if (check_error(e) != 0) {
+                fprintf(stderr, "Failed getting RS2_OPTION_VISUAL_PRESET ranges\n");
+                return 1;
+            }
+
+            int r;
+            for (r = (int)min; r < (int)max; r++)
+            {
+                if (done == 1)
+                    break;
+
+                preset_desc = rs2_get_option_value_description((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, r, &e);
+                if (check_error(e) != 0) {
+                    fprintf(stderr, "Failed getting RS2_OPTION_VISUAL_PRESET description\n");
+                    rs2_delete_sensor(sen);
+                    return 1;
+                }
+
+                if (strcmp(preset_desc, new_preset) == 0)
+                {
+                    fprintf(stderr, "Changing preset to %s\n", preset_desc);
+                    rs2_set_option((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, r, &e);
+                    if (check_error(e) != 0) {
+                        fprintf(stderr, "Failed setting RS2_OPTION_VISUAL_PRESET\n");
+                        return 1;
+                    }
+
+                    pres = rs2_get_option((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, &e);
+                    if (check_error(e) != 0) {
+                        fprintf(stderr, "Failed getting RS2_OPTION_VISUAL_PRESET\n");
+                        rs2_delete_sensor(sen);
+                        return 1;
+                    }
+
+                    if ((int)pres != (int)r) {
+                        fprintf(stderr, "Setting RS2_OPTION_VISUAL_PRESET did not change preset\n");
+                        return 1;
+                    }
+
+                    done = 1;
+                }
+            }
+        }
+    }
+
+    if (done == 0) {
+        fprintf(stderr, "Did not find preset: %s\n", new_preset);
+        return 1;
+    }
+
+    return 0;
+}
+
+int8_t create_streams(struct RS_State* s)
 {
     if (s == NULL) {
         fprintf(stderr, "Cannot init streaming: given pointer is null\n");
@@ -204,6 +387,22 @@ int8_t init_streaming(struct RS_State* s)
         return 1;
     }
 
+    return 0;
+}
+
+int8_t start_stream(struct RS_State* s)
+{
+    rs2_error* e = NULL;
+
+    if (s == NULL) {
+        fprintf(stderr, "Cannot star t stream: given pointer is null\n");
+        return 1;
+    }
+
+    if (s->selection) {
+        rs2_delete_pipeline_profile(s->selection);
+    }
+
     s->selection = rs2_pipeline_start_with_config(s->pipe, s->config, &e);
     if (check_error(e) != 0) {
         fprintf(stderr, "Failed starting pipeline\n");
@@ -223,77 +422,6 @@ int8_t init_streaming(struct RS_State* s)
         fprintf(stderr, "Failed getting pipeline profile stream count\n");
         s->stream_list_count = 0;
         return 1;
-    }
-
-    s->sensor_list = rs2_query_sensors(s->dev, &e);
-    if (check_error(e) != 0) {
-        fprintf(stderr, "Failed getting sensors for device\n");
-        s->sensor_list = NULL;
-        return 1;
-    }
-
-    s->sensor_list_count = rs2_get_sensors_count(s->sensor_list, &e);
-    if (check_error(e) != 0) {
-        fprintf(stderr, "Failed getting sensor list count\n");
-        s->sensor_list_count = 0;
-        return 1;
-    }
-
-    int sensor;
-    for (sensor = 0; sensor < s->sensor_list_count; sensor++)
-    {
-        rs2_sensor* sen = rs2_create_sensor(s->sensor_list, sensor, &e);
-
-        if (check_error(e) != 0) {
-            fprintf(stderr, "Failed creating temp sensor object %d / %d\n", sensor, s->sensor_list_count);
-            return 1;
-        }
-
-        // This cast is done as the types are opaque and defined in the C++ API
-        // Apparently simply doing this cast is the expected way to do this, says Intel
-        int supports = rs2_supports_option((const rs2_options*)sen, RS2_OPTION_LASER_POWER, &e);
-
-        if (check_error(e) != 0) {
-            fprintf(stderr, "Failed asking if sensor supports LASER POWER\n");
-            rs2_delete_sensor(sen);
-            return 1;
-        }
-
-        if (supports == 1) {
-            float min, max, step, def;
-            rs2_get_option_range((const rs2_options*)sen, RS2_OPTION_LASER_POWER, &min, &max, &step, &def, &e);
-            if (check_error(e) != 0) {
-                fprintf(stderr, "Failed getting RS2_OPTION_LASER_POWER ranges\n");
-                rs2_delete_sensor(sen);
-                return 1;
-            }
-
-            rs2_set_option((const rs2_options*)sen, RS2_OPTION_LASER_POWER, max, &e);
-            if (check_error(e) != 0) {
-                fprintf(stderr, "Failed setting RS2_OPTION_LASER_POWER to %f\n", max);
-                rs2_delete_sensor(sen);
-                return 1;
-            }
-        }
-
-        supports = rs2_supports_option((const rs2_options*)sen, RS2_OPTION_FRAMES_QUEUE_SIZE, &e);
-        if (check_error(e) != 0) {
-            fprintf(stderr, "Failed asking if sensor supports LASER RS2_OPTION_FRAMES_QUEUE_SIZE\n");
-            rs2_delete_sensor(sen);
-            return 1;
-        }
-
-        if (supports == 1)
-        {
-            rs2_set_option((const rs2_options*)sen, RS2_OPTION_FRAMES_QUEUE_SIZE, 0, &e);
-            if (check_error(e) != 0) {
-                fprintf(stderr, "Failed setting RS2_OPTION_FRAMES_QUEUE_SIZE to 0\n");
-                rs2_delete_sensor(sen);
-                return 1;
-            }
-        }
-
-        rs2_delete_sensor(sen);
     }
 
     return 0;
@@ -364,6 +492,12 @@ int8_t init_reset(struct RS_State* s, int rs_dev_index)
 
     } else {
         fprintf(stderr, "Device starts with advanced mode enabled, not resetting\n");
+    }
+
+    if (create_device_sensors(s) != 0)
+    {
+        fprintf(stderr, "Failed creating device sensors\n");
+        return 1;
     }
 
     return 0;
@@ -451,7 +585,7 @@ int8_t initialize(struct RS_State* rs_state)
     return 0;
 }
 
-int8_t startSensor(struct RS_State* rs_state)
+int8_t startSensor(struct RS_State* rs_state, int preset_index)
 {
     rs2_error* e = NULL;
 
@@ -495,9 +629,21 @@ int8_t startSensor(struct RS_State* rs_state)
         return 1;
     }
 
-    if (init_streaming(rs_state) != 0)
+    if (create_streams(rs_state) != 0)
     {
         fprintf(stderr, "Failed initting streams\n");
+        return 1;
+    }
+
+    if (set_preset(rs_state, presets[preset_index]) != 0)
+    {
+        fprintf(stderr, "Failed setting preset\n");
+        return 1;
+    }
+
+    if (start_stream(rs_state) != 0)
+    {
+        fprintf(stderr, "Failed starting streams\n");
         return 1;
     }
 
@@ -608,117 +754,6 @@ int8_t update(struct RS_State* rs_state, uint16_t* dep, struct RGBA* dep_rgb, st
     return 0;
 }
 
-int8_t setPreset(const char* new_preset, struct RS_State* rs_state)
-{
-    rs2_error* e = NULL;
-
-    int sensor;
-    int8_t done = 0;
-
-    for (sensor = 0; sensor < rs_state->sensor_list_count; sensor++)
-    {
-        if (done == 1)
-            break;
-
-        rs2_sensor* sen = rs2_create_sensor(rs_state->sensor_list, sensor, &e);
-
-        if (check_error(e) != 0) {
-            fprintf(stderr, "Failed creating temp sensor object %d / %d\n", sensor, rs_state->sensor_list_count);
-            return 1;
-        }
-
-        int supports = rs2_supports_option((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, &e);
-
-        if (check_error(e) != 0) {
-            fprintf(stderr, "Failed asking if sensor supports RS2_OPTION_VISUAL_PRESET\n");
-            rs2_delete_sensor(sen);
-            return 1;
-        }
-
-        if (supports == 1)
-        {
-            float pres = rs2_get_option((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, &e);
-            if (check_error(e) != 0) {
-                fprintf(stderr, "Failed getting RS2_OPTION_VISUAL_PRESET\n");
-                rs2_delete_sensor(sen);
-                return 1;
-            }
-
-            const char* preset_desc = rs2_get_option_value_description((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, pres, &e);
-            if (check_error(e) != 0) {
-                fprintf(stderr, "Failed getting RS2_OPTION_VISUAL_PRESET description\n");
-                rs2_delete_sensor(sen);
-                return 1;
-            }
-
-            if (strcmp(preset_desc, new_preset) == 0)
-            {
-                fprintf(stderr, "already using preset: %s\n", preset_desc);
-                done = 1;
-                continue;
-            }
-
-            float min, max, step, def;
-            rs2_get_option_range((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, &min, &max, &step, &def, &e);
-            if (check_error(e) != 0) {
-                fprintf(stderr, "Failed getting RS2_OPTION_VISUAL_PRESET ranges\n");
-                rs2_delete_sensor(sen);
-                return 1;
-            }
-
-            int r;
-            for (r = (int)min; r < (int)max; r++)
-            {
-                if (done == 1)
-                    break;
-
-                preset_desc = rs2_get_option_value_description((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, r, &e);
-                if (check_error(e) != 0) {
-                    fprintf(stderr, "Failed getting RS2_OPTION_VISUAL_PRESET description\n");
-                    rs2_delete_sensor(sen);
-                    return 1;
-                }
-
-                if (strcmp(preset_desc, new_preset) == 0)
-                {
-                    fprintf(stderr, "Changing preset to %s\n", preset_desc);
-                    rs2_set_option((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, r, &e);
-                    if (check_error(e) != 0) {
-                        fprintf(stderr, "Failed setting RS2_OPTION_VISUAL_PRESET\n");
-                        rs2_delete_sensor(sen);
-                        return 1;
-                    }
-
-                    pres = rs2_get_option((const rs2_options*)sen, RS2_OPTION_VISUAL_PRESET, &e);
-                    if (check_error(e) != 0) {
-                        fprintf(stderr, "Failed getting RS2_OPTION_VISUAL_PRESET\n");
-                        rs2_delete_sensor(sen);
-                        return 1;
-                    }
-
-                    if ((int)pres != (int)r) {
-                        fprintf(stderr, "Setting RS2_OPTION_VISUAL_PRESET did not change preset\n");
-                        rs2_delete_sensor(sen);
-                        return 1;
-                    }
-
-                    done = 1;
-                }
-            }
-        }
-
-        rs2_delete_sensor(sen);
-    }
-
-    if (done != 1)
-    {
-        fprintf(stderr, "Did not find preset to use %s\n", new_preset);
-        return 1;
-    }
-
-    return 0;
-}
-
 #ifdef WIN32
 int8_t sigint_handler(DWORD fdwCtrlType) {
     if(fdwCtrlType == CTRL_C_EVENT) {
@@ -775,7 +810,7 @@ int main(int argc,  char** argv)
     if (initialize(&rs_state) != 0)
         return 1;
 
-    if (startSensor(&rs_state) != 0)
+    if (startSensor(&rs_state, 0) != 0)
         return 1;
 
     uint16_t* dep;
@@ -865,9 +900,20 @@ int main(int argc,  char** argv)
             preset_index++;
             if (preset_index >= PRESET_COUNT)
                 preset_index = 0;
-            if (setPreset(presets[preset_index], &rs_state) != 0)
-            {
+
+            if (clear_state(&rs_state)) {
                 running = 0;
+                continue;
+            }
+
+            if (initialize(&rs_state) != 0) {
+                running = 0;
+                continue;
+            }
+
+            if (startSensor(&rs_state, preset_index) != 0) {
+                running = 0;
+                continue;
             }
         }
 
