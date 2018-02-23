@@ -7,8 +7,11 @@
 #define SDL_MAIN_HANDLED
 #ifdef WIN32
 #include <SDL.h>
+#include <Windows.h>
 #else
 #include <SDL2/SDL.h>
+#include <unistd.h>
+#include <signal.h>
 #endif
 
 #include <stdint.h>
@@ -16,9 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef __linux
-#include <unistd.h>
-#endif
+int8_t got_sigint = 0;
 
 const int cDepthW = 1280;
 const int cDepthH = 720;
@@ -718,8 +719,32 @@ int8_t setPreset(const char* new_preset, struct RS_State* rs_state)
     return 0;
 }
 
+#ifdef WIN32
+bool sigint_handler(DWORD fdwCtrlType) {
+    if(fdwCtrlType == CTRL_C_EVENT) {
+        fprintf(stderr, "got signal: %d\n", fdwCtrlType);
+        got_sigint = 1;
+        return true;
+    }
+
+    return false;
+}
+#else
+void sigint_handler(int sig)
+{
+    fprintf(stderr, "got sigint\n");
+    got_sigint = 1;
+}
+#endif
+
 int main(int argc,  char** argv)
 {
+#ifdef WIN32
+    SetConsoleCtrlHandler( (PHANDLER_ROUTINE) sigint_handler, TRUE );
+#else
+    signal(SIGINT, sigint_handler);
+#endif
+
     SDL_SetMainReady();
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -860,6 +885,9 @@ int main(int argc,  char** argv)
         SDL_RenderClear(sdlren);
         SDL_RenderCopy(sdlren, tex, NULL, NULL);
         SDL_RenderPresent(sdlren);
+
+        if (got_sigint != 0)
+            running = 0;
     }
 
     clear_state(&rs_state);
