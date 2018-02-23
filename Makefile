@@ -1,6 +1,6 @@
 CC=gcc
 CFLAGS=-I/home/gekko/librealsense/include
-LDFLAGS=-lSDL2 -L/home/gekko/librealsense2/build -lrealsense2
+LDFLAGS=-lSDL2 -L/home/gekko/librealsense/build -lrealsense2
 SOURCES=main.c
 OBJECTS=$(SOURCES:.c=.o)
 EXECUTABLE=minimal_realsense2

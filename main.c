@@ -16,6 +16,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __linux
+#include <unistd.h>
+#endif
+
 const int cDepthW = 1280;
 const int cDepthH = 720;
 const int cColorW = 1920;
@@ -499,7 +503,7 @@ int8_t startSensor(struct RS_State* rs_state)
     return 0;
 }
 
-inline uint16_t lerp(uint16_t a, uint16_t b, float alpha)
+uint16_t lerp(uint16_t a, uint16_t b, float alpha)
 {
     return a * (1.0f - alpha) + alpha * b;
 }
