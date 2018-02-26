@@ -442,37 +442,6 @@ int8_t start_stream(struct RS_State* s, int preset_index)
     return 0;
 }
 
-int8_t ensure_advanced_enabled(struct RS_State* s)
-{
-    rs2_error* e = NULL;
-
-    if (s == NULL) {
-        fprintf(stderr, "Cannot init-reset state: given pointer is null\n");
-        return 1;
-    }
-
-    if (s->ctx == NULL || s->dev == NULL) {
-        fprintf(stderr, "Cannot ensure advanced mode: context or dev NULL\n");
-        return 1;
-    }
-
-    if (s->advanced_enabled == 0)  {
-        fprintf(stderr, "Device starts with advanced mode disabled\n");
-
-        fprintf(stderr, "Resetting device\n");
-        rs2_hardware_reset(s->dev, &e);
-        if (check_error(e) != 0) {
-            fprintf(stderr, "hardware reset failed in init reset\n");
-            return 1;
-        }
-
-    } else {
-        fprintf(stderr, "Device starts with advanced mode enabled, not resetting\n");
-    }
-
-    return 0;
-}
-
 int8_t set_advanced(struct RS_State* s, int val)
 {
     if (s == NULL) {
@@ -503,7 +472,7 @@ int8_t set_advanced(struct RS_State* s, int val)
     return 0;
 }
 
-int8_t ensureAdvanced(struct RS_State* s)
+int8_t ensure_advanced(struct RS_State* s)
 {
     while (s->advanced_enabled == 0)
     {
@@ -552,7 +521,7 @@ int8_t ensureAdvanced(struct RS_State* s)
     return 0;
 }
 
-int8_t startSensor(struct RS_State* rs_state, int dev_index, int preset_index)
+int8_t start_sensor(struct RS_State* rs_state, int dev_index, int preset_index)
 {
     rs2_error* e = NULL;
 
@@ -741,7 +710,7 @@ int main(int argc,  char** argv)
 
     fprintf(stderr, "Ensuring advanced mode is enabled\n");
 
-    if (ensureAdvanced(&rs_state) != 0)
+    if (ensure_advanced(&rs_state) != 0)
     {
         fprintf(stderr, "Ensuring advanced mode failed\n");
         return 1;
@@ -749,7 +718,7 @@ int main(int argc,  char** argv)
 
     fprintf(stderr, "Starting sensor\n");
 
-    if (startSensor(&rs_state, 0, 0) != 0)
+    if (start_sensor(&rs_state, 0, 0) != 0)
         return 1;
 
     fprintf(stderr, "Sensor started\n");
@@ -848,7 +817,7 @@ int main(int argc,  char** argv)
                 continue;
             }
 
-            if (startSensor(&rs_state, 0, preset_index) != 0) {
+            if (start_sensor(&rs_state, 0, preset_index) != 0) {
                 running = 0;
                 continue;
             }
