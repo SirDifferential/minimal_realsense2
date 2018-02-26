@@ -77,6 +77,25 @@ int8_t check_error(rs2_error* e)
     return 0;
 }
 
+
+int8_t create_context(struct RS_State* rs_state)
+{
+    rs2_error* e = NULL;
+
+    fprintf(stderr, "creating context\n");
+
+    rs_state->ctx = rs2_create_context(RS2_API_VERSION, &e);
+    if (check_error(e) != 0) {
+        rs_state->ctx = NULL;
+        fprintf(stderr, "Failed creating rs context\n");
+        return 1;
+    }
+
+    fprintf(stderr, "context created\n");
+
+    return 0;
+}
+
 int8_t clear_state(struct RS_State* s)
 {
     if (s == NULL) {
@@ -130,86 +149,7 @@ int8_t clear_state(struct RS_State* s)
     return 0;
 }
 
-int8_t create_device_sensors(struct RS_State* s)
-{
-    rs2_error* e = NULL;
-
-    if (s == NULL) {
-        fprintf(stderr, "Cannot create device sensors: given pointer is null\n");
-        return 1;
-    }
-
-    s->sensor_list = rs2_query_sensors(s->dev, &e);
-    if (check_error(e) != 0) {
-        fprintf(stderr, "Failed getting sensors for device\n");
-        s->sensor_list = NULL;
-        return 1;
-    }
-
-    s->sensor_list_count = rs2_get_sensors_count(s->sensor_list, &e);
-    if (check_error(e) != 0) {
-        fprintf(stderr, "Failed getting sensor list count\n");
-        s->sensor_list_count = 0;
-        return 1;
-    }
-
-    int sensor;
-    for (sensor = 0; sensor < s->sensor_list_count && sensor < RS_STATE_SENSORS_MAX; sensor++)
-    {
-        rs2_sensor* sen = rs2_create_sensor(s->sensor_list, sensor, &e);
-
-        if (check_error(e) != 0) {
-            fprintf(stderr, "Failed creating temp sensor object %d / %d\n", sensor, s->sensor_list_count);
-            return 1;
-        }
-
-        s->sensors[s->sensors_created] = sen;
-        s->sensors_created++;
-
-        // This cast is done as the types are opaque and defined in the C++ API
-        // Apparently simply doing this cast is the expected way to do this, says Intel
-        int supports = rs2_supports_option((const rs2_options*)sen, RS2_OPTION_LASER_POWER, &e);
-
-        if (check_error(e) != 0) {
-            fprintf(stderr, "Failed asking if sensor supports LASER POWER\n");
-            return 1;
-        }
-
-        if (supports == 1) {
-            float min, max, step, def;
-            rs2_get_option_range((const rs2_options*)sen, RS2_OPTION_LASER_POWER, &min, &max, &step, &def, &e);
-            if (check_error(e) != 0) {
-                fprintf(stderr, "Failed getting RS2_OPTION_LASER_POWER ranges\n");
-                return 1;
-            }
-
-            rs2_set_option((const rs2_options*)sen, RS2_OPTION_LASER_POWER, max, &e);
-            if (check_error(e) != 0) {
-                fprintf(stderr, "Failed setting RS2_OPTION_LASER_POWER to %f\n", max);
-                return 1;
-            }
-        }
-
-        supports = rs2_supports_option((const rs2_options*)sen, RS2_OPTION_FRAMES_QUEUE_SIZE, &e);
-        if (check_error(e) != 0) {
-            fprintf(stderr, "Failed asking if sensor supports LASER RS2_OPTION_FRAMES_QUEUE_SIZE\n");
-            return 1;
-        }
-
-        if (supports == 1)
-        {
-            rs2_set_option((const rs2_options*)sen, RS2_OPTION_FRAMES_QUEUE_SIZE, 0, &e);
-            if (check_error(e) != 0) {
-                fprintf(stderr, "Failed setting RS2_OPTION_FRAMES_QUEUE_SIZE to 0\n");
-                return 1;
-            }
-        }
-    }
-
-    return 0;
-}
-
-int8_t init_state(struct RS_State* s, int rs_dev_index)
+int8_t ensure_device(struct RS_State* s, int rs_dev_index)
 {
     if (s == NULL) {
         fprintf(stderr, "Cannot init state: given pointer is null\n");
@@ -217,15 +157,21 @@ int8_t init_state(struct RS_State* s, int rs_dev_index)
     }
 
     rs2_error* e = NULL;
-    if (s->ctx != NULL) {
-        rs2_delete_context(s->ctx);
-        s->ctx = NULL;
+    if (s->ctx == NULL) {
+        fprintf(stderr, "Cannot ensure device: context is null\n");
+        return 1;
     }
 
-    s->ctx = rs2_create_context(RS2_API_VERSION, &e);
-    if (check_error(e) != 0) {
-        s->ctx = NULL;
-        return 1;
+    if (s->device_list != NULL) {
+        rs2_delete_device_list(s->device_list);
+        s->device_list = NULL;
+    }
+
+    s->dev_count = 0;
+
+    if (s->dev != NULL) {
+        rs2_delete_device(s->dev);
+        s->dev = NULL;
     }
 
     s->device_list = rs2_query_devices(s->ctx, &e);
@@ -248,11 +194,6 @@ int8_t init_state(struct RS_State* s, int rs_dev_index)
     s->dev = rs2_create_device(s->device_list, rs_dev_index, &e);
     if (check_error(e) != 0) {
         s->dev = NULL;
-        return 1;
-    }
-
-    if (create_device_sensors(s) != 0) {
-        fprintf(stderr, "Failed creating device sensors\n");
         return 1;
     }
 
@@ -358,9 +299,9 @@ int8_t create_streams(struct RS_State* s)
         return 1;
     }
 
-    if (s->dev == NULL) {
-        fprintf(stderr, "No device for initting streaming\n");
-        return 1;
+    if (s->pipe != NULL) {
+        rs2_delete_pipeline(s->pipe);
+        s->pipe = NULL;
     }
 
     rs2_error* e = NULL;
@@ -391,7 +332,7 @@ int8_t create_streams(struct RS_State* s)
     return 0;
 }
 
-int8_t start_stream(struct RS_State* s)
+int8_t start_stream(struct RS_State* s, int preset_index)
 {
     rs2_error* e = NULL;
 
@@ -402,14 +343,79 @@ int8_t start_stream(struct RS_State* s)
 
     if (s->selection) {
         rs2_delete_pipeline_profile(s->selection);
+        s->selection = NULL;
     }
 
-    s->selection = rs2_pipeline_start_with_config(s->pipe, s->config, &e);
+    s->selection = rs2_config_resolve(s->config, s->pipe, &e);
     if (check_error(e) != 0) {
-        fprintf(stderr, "Failed starting pipeline\n");
+        fprintf(stderr, "Failed resolving config\n");
         s->selection = NULL;
         return 1;
     }
+
+    if (s->device_list != NULL) {
+        rs2_delete_device_list(s->device_list);
+        s->device_list = 0;
+    }
+
+    s->dev_count = 0;
+
+    if (s->dev) {
+        rs2_delete_device(s->dev);
+        s->dev = NULL;
+    }
+
+    s->dev = rs2_pipeline_profile_get_device(s->selection, &e);
+    if (check_error(e) != 0) {
+        fprintf(stderr, "Failed getting device for pipeline profile\n");
+        s->dev = NULL;
+        return 1;
+    }
+
+    if (s->sensor_list) {
+        rs2_delete_sensor_list(s->sensor_list);
+        s->sensor_list = NULL;
+    }
+
+    if (s->sensor_list_count > 0) {
+        int sensor;
+        for (sensor = 0; sensor < s->sensor_list_count; sensor++) {
+            rs2_delete_sensor(s->sensors[sensor]);
+            s->sensors[sensor] = NULL;
+        }
+        s->sensor_list_count = 0;
+    }
+
+    s->sensor_list = rs2_query_sensors(s->dev, &e);
+    if (check_error(e) != 0) {
+        fprintf(stderr, "Failed querying for sensors\n");
+        s->sensor_list = NULL;
+        return 1;
+    }
+
+    s->sensor_list_count = rs2_get_sensors_count(s->sensor_list, &e);
+    if (check_error(e) != 0) {
+        fprintf(stderr, "Failed getting sensor list count\n");
+        s->sensor_list_count = 0;
+        return 1;
+    }
+
+    int sensor;
+    for (sensor = 0; sensor < s->sensor_list_count; sensor++) {
+        s->sensors[sensor] = rs2_create_sensor(s->sensor_list, sensor, &e);
+        if (check_error(e) != 0) {
+            fprintf(stderr, "Failed creating sensor %d / %d\n", sensor, s->sensor_list_count);
+            s->sensors[sensor] = NULL;
+            return 1;
+        }
+
+        s->sensors_created++;
+    }
+
+    if (set_preset(s, presets[preset_index]) != 0)
+        return 1;
+
+    fprintf(stderr, "Preset changed");
 
     s->stream_list = rs2_pipeline_profile_get_streams(s->selection, &e);
     if (check_error(e) != 0) {
@@ -425,59 +431,28 @@ int8_t start_stream(struct RS_State* s)
         return 1;
     }
 
+    rs2_pipeline_start_with_config(s->pipe, s->config, &e);
+    if (check_error(e) != 0) {
+        fprintf(stderr, "Failed starting pipeline\n");
+        return 1;
+    }
+
+    fprintf(stderr, "pipeline started\n");
+
     return 0;
 }
 
-int8_t init_reset(struct RS_State* s, int rs_dev_index)
+int8_t ensure_advanced_enabled(struct RS_State* s)
 {
+    rs2_error* e = NULL;
+
     if (s == NULL) {
         fprintf(stderr, "Cannot init-reset state: given pointer is null\n");
         return 1;
     }
 
-    rs2_error* e = NULL;
-
-    if (clear_state(s) != 0) {
-        fprintf(stderr, "Failed clearing state while resetting\n");
-        return 1;
-    }
-
-    s->ctx = rs2_create_context(RS2_API_VERSION, &e);
-    if (check_error(e) != 0) {
-        fprintf(stderr, "create context failed when init resetting\n");
-        s->ctx = NULL;
-        return 1;
-    }
-
-    s->device_list = rs2_query_devices(s->ctx, &e);
-    if (check_error(e) != 0) {
-        fprintf(stderr, "Failed querying for devices in init reset\n");
-        s->device_list = NULL;
-        return 1;
-    }
-
-    s->dev_count = rs2_get_device_count(s->device_list, &e);
-    if (check_error(e) != 0) {
-        fprintf(stderr, "failed getting device count in init reset\n");
-        s->dev_count = 0;
-        return 1;
-    }
-
-    fprintf(stderr, "There are %d connected RealSense devices.\n", s->dev_count);
-    if (s->dev_count == 0)
-        return 1;
-
-    fprintf(stderr, "Creating device %d\n", rs_dev_index);
-    s->dev = rs2_create_device(s->device_list, rs_dev_index, &e);
-    if (check_error(e) != 0) {
-        fprintf(stderr, "Failed creating device in init reset\n");
-        s->dev = NULL;
-        return 1;
-    }
-
-    rs2_is_enabled(s->dev, &s->advanced_enabled, &e);
-    if (check_error(e) != 0) {
-        fprintf(stderr, "failed testing advanced mode flag in init reset\n");
+    if (s->ctx == NULL || s->dev == NULL) {
+        fprintf(stderr, "Cannot ensure advanced mode: context or dev NULL\n");
         return 1;
     }
 
@@ -493,12 +468,6 @@ int8_t init_reset(struct RS_State* s, int rs_dev_index)
 
     } else {
         fprintf(stderr, "Device starts with advanced mode enabled, not resetting\n");
-    }
-
-    if (create_device_sensors(s) != 0)
-    {
-        fprintf(stderr, "Failed creating device sensors\n");
-        return 1;
     }
 
     return 0;
@@ -534,28 +503,27 @@ int8_t set_advanced(struct RS_State* s, int val)
     return 0;
 }
 
-
-int8_t ensureAdvanced(struct RS_State* rs_state)
+int8_t ensureAdvanced(struct RS_State* s)
 {
-    if (init_reset(rs_state, 0) != 0) {
-        fprintf(stderr, "Failed init-reset while waiting for advanced mode\n");
-        return 1;
-    }
-
-    while (rs_state->advanced_enabled == 0)
+    while (s->advanced_enabled == 0)
     {
         fprintf(stderr, "Waiting for advanced mode\n");
-        if (clear_state(rs_state) != 0) {
+        if (clear_state(s) != 0) {
             fprintf(stderr, "Failed clearing state while waiting for advanced mode\n");
             return 1;
         }
 
-        if (init_state(rs_state, 0) != 0) {
-            fprintf(stderr, "Failed initting state while waining for advanced mode\n");
+        if (create_context(s) != 0) {
+            fprintf(stderr, "Failed initializing context while waiting for advanced mode\n");
             return 1;
         }
 
-        if (set_advanced(rs_state, 1) != 0) {
+        if (ensure_device(s, 0) != 0) {
+            fprintf(stderr, "Failed creating device when waiting for advanced mode\n");
+            return 1;
+        }
+
+        if (set_advanced(s, 1) != 0) {
             fprintf(stderr, "failed setting advanced mode\n");
             return 1;
         }
@@ -569,65 +537,30 @@ int8_t ensureAdvanced(struct RS_State* rs_state)
 
     fprintf(stderr, "advanced mode enabled\n");
 
+    // Once the device is properly in advanced mode, clear everything
+    // The device can then be re-opened with whatever parameters are required
+    if (clear_state(s) != 0)
+        return 1;
+
+    // Apparently the device needs a while between clearing the state and starting devices again
+#ifdef WIN32
+        Sleep(1000);
+#else
+        usleep(1000 * 1000);
+#endif
+
     return 0;
 }
 
-int8_t initialize(struct RS_State* rs_state)
+int8_t startSensor(struct RS_State* rs_state, int dev_index, int preset_index)
 {
     rs2_error* e = NULL;
 
-    rs_state->ctx = rs2_create_context(RS2_API_VERSION, &e);
-    if (check_error(e) != 0) {
-        rs_state->ctx = NULL;
-        fprintf(stderr, "Failed creating rs context\n");
-        return 1;
-    }
-
-    return 0;
-}
-
-int8_t startSensor(struct RS_State* rs_state, int preset_index)
-{
-    rs2_error* e = NULL;
-
-    if (rs_state->device_list != NULL)
-    {
-        if (clear_state(rs_state) != 0)
-            return 1;
-    }
-
-    rs_state->device_list = rs2_query_devices(rs_state->ctx, &e);
-    if (check_error(e) != 0) {
-        rs_state->device_list = NULL;
-        return 1;
-    }
-
-    rs_state->dev_count = rs2_get_device_count(rs_state->device_list, &e);
-    if (check_error(e) != 0) {
-        rs_state->dev_count = 0;
-        return 1;
-    }
-
-    int i;
-
-    for (i = 0; i < rs_state->dev_count; i++)
-    {
-        rs_state->dev = rs2_create_device(rs_state->device_list, i, &e);
-        if (check_error(e) != 0) {
+    if (rs_state->ctx == NULL) {
+        if (create_context(rs_state) != 0)  {
+            fprintf(stderr, "Failed creating context when starting sensor\n");
             return 1;
         }
-    }
-
-    if (rs_state->dev == NULL)
-    {
-        fprintf(stderr, "Failed getting device\n");
-        return 1;
-    }
-
-    if (ensureAdvanced(rs_state) != 0)
-    {
-        fprintf(stderr, "Ensuring advanced mode failed\n");
-        return 1;
     }
 
     if (create_streams(rs_state) != 0)
@@ -636,17 +569,15 @@ int8_t startSensor(struct RS_State* rs_state, int preset_index)
         return 1;
     }
 
-    if (set_preset(rs_state, presets[preset_index]) != 0)
-    {
-        fprintf(stderr, "Failed setting preset\n");
-        return 1;
-    }
+    fprintf(stderr, "streams created\n");
 
-    if (start_stream(rs_state) != 0)
+    if (start_stream(rs_state, preset_index) != 0)
     {
         fprintf(stderr, "Failed starting streams\n");
         return 1;
     }
+
+    fprintf(stderr, "streams started\n");
 
     return 0;
 }
@@ -808,11 +739,20 @@ int main(int argc,  char** argv)
     struct RS_State rs_state;
     memset(&rs_state, 0, sizeof(rs_state));
 
-    if (initialize(&rs_state) != 0)
+    fprintf(stderr, "Ensuring advanced mode is enabled\n");
+
+    if (ensureAdvanced(&rs_state) != 0)
+    {
+        fprintf(stderr, "Ensuring advanced mode failed\n");
+        return 1;
+    }
+
+    fprintf(stderr, "Starting sensor\n");
+
+    if (startSensor(&rs_state, 0, 0) != 0)
         return 1;
 
-    if (startSensor(&rs_state, 0) != 0)
-        return 1;
+    fprintf(stderr, "Sensor started\n");
 
     uint16_t* dep;
     struct RGBA* dep_rgb;
@@ -888,6 +828,7 @@ int main(int argc,  char** argv)
     while (running == 1)
     {
         if (update(&rs_state, dep, dep_rgb, col, &got_dep, &got_col) != 0) {
+            fprintf(stderr, "sensor update failed\n");
             running = 0;
             continue;
         }
@@ -907,12 +848,7 @@ int main(int argc,  char** argv)
                 continue;
             }
 
-            if (initialize(&rs_state) != 0) {
-                running = 0;
-                continue;
-            }
-
-            if (startSensor(&rs_state, preset_index) != 0) {
+            if (startSensor(&rs_state, 0, preset_index) != 0) {
                 running = 0;
                 continue;
             }
