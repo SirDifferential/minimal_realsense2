@@ -736,6 +736,7 @@ int main(int argc,  char** argv)
     col = (struct RGBA*)malloc(col_bytes);
 
     memset(dep, 0, dep_bytes);
+    memset(dep_rgb, 0, dep_bytes_rgb);
     memset(col, 0, col_bytes);
 
 #ifdef RENDER_DEPTH
