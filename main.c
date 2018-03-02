@@ -3,6 +3,7 @@
 #include <librealsense2/h/rs_pipeline.h>
 #include <librealsense2/h/rs_option.h>
 #include <librealsense2/h/rs_frame.h>
+#include <librealsense2/rsutil.h>
 
 #define SDL_MAIN_HANDLED
 #ifdef WIN32
@@ -323,11 +324,15 @@ int8_t create_streams(struct RS_State* s)
         return 1;
     }
 
+    fprintf(stderr, "Depth stream created\n");
+
     rs2_config_enable_stream(s->config, RS2_STREAM_COLOR, -1, cColorW, cColorH, RS2_FORMAT_RGB8, 30, &e);
     if (check_error(e) != 0) {
         fprintf(stderr, "Failed initting color streaming\n");
         return 1;
     }
+
+    fprintf(stderr, "Color stream created\n");
 
     return 0;
 }
@@ -547,6 +552,55 @@ int8_t start_sensor(struct RS_State* rs_state, int dev_index, int preset_index)
     }
 
     fprintf(stderr, "streams started\n");
+
+    int stream;
+    float fov[2];
+    float rgb_fov[2];
+    for (stream = 0; stream < rs_state->stream_list_count; stream++)
+    {
+        rs2_stream str;
+        rs2_format format;
+        int index;
+        int id;
+        int fps;
+
+        const rs2_stream_profile* prof = rs2_get_stream_profile(rs_state->stream_list, stream, &e);
+        if (check_error(e) != 0) {
+            fprintf(stderr, "Failed getting stream profile: %d / %d\n", stream, rs_state->stream_list_count);
+            return 1;
+        }
+
+        rs2_get_stream_profile_data(prof, &str, &format, &index, &id, &fps, &e);
+
+        if (check_error(e) != 0) {
+            fprintf(stderr, "Failed getting stream profile data for stream: %d / %d\n", stream, rs_state->stream_list_count);
+            return 1;
+        }
+
+        rs2_intrinsics intrinsics;
+        if (stream == RS2_STREAM_DEPTH)
+        {
+            rs2_get_video_stream_intrinsics(prof, &intrinsics, &e);
+            if (check_error(e) != 0) {
+                fprintf(stdout, "Failed getting depth stream intrinsics\n");
+                return 1;
+            }
+
+            rs2_fov(&intrinsics, fov);
+            fprintf(stderr, "Started depth stream, fov %f, %f\n", fov[0], fov[1]);
+        }
+        else if (stream == RS2_STREAM_COLOR)
+        {
+            rs2_get_video_stream_intrinsics(prof, &intrinsics, &e);
+            if (check_error(e) != 0) {
+                fprintf(stderr, "Failed getting color stream intrinsics\n");
+                return 1;
+            }
+
+            rs2_fov(&intrinsics, rgb_fov);
+            fprintf(stderr, "Started color stream, fov %f, %f\n", rgb_fov[0], rgb_fov[1]);
+        }
+    }
 
     return 0;
 }
