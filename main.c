@@ -422,6 +422,15 @@ int8_t start_stream(struct RS_State* s, int preset_index)
 
     fprintf(stderr, "Preset changed");
 
+    rs2_pipeline_start_with_config(s->pipe, s->config, &e);
+    if (check_error(e) != 0) {
+        fprintf(stderr, "Failed starting pipeline\n");
+        return 1;
+    }
+
+    fprintf(stderr, "pipeline started\n");
+
+
     s->stream_list = rs2_pipeline_profile_get_streams(s->selection, &e);
     if (check_error(e) != 0) {
         fprintf(stderr, "Failed getting pipeline profile streams\n");
@@ -436,13 +445,7 @@ int8_t start_stream(struct RS_State* s, int preset_index)
         return 1;
     }
 
-    rs2_pipeline_start_with_config(s->pipe, s->config, &e);
-    if (check_error(e) != 0) {
-        fprintf(stderr, "Failed starting pipeline\n");
-        return 1;
-    }
-
-    fprintf(stderr, "pipeline started\n");
+    fprintf(stderr, "stream list count: %d\n", s->stream_list_count);
 
     return 0;
 }
@@ -578,7 +581,7 @@ int8_t start_sensor(struct RS_State* rs_state, int dev_index, int preset_index)
         }
 
         rs2_intrinsics intrinsics;
-        if (stream == RS2_STREAM_DEPTH)
+        if (str == RS2_STREAM_DEPTH)
         {
             rs2_get_video_stream_intrinsics(prof, &intrinsics, &e);
             if (check_error(e) != 0) {
@@ -589,7 +592,7 @@ int8_t start_sensor(struct RS_State* rs_state, int dev_index, int preset_index)
             rs2_fov(&intrinsics, fov);
             fprintf(stderr, "Started depth stream, fov %f, %f\n", fov[0], fov[1]);
         }
-        else if (stream == RS2_STREAM_COLOR)
+        else if (str == RS2_STREAM_COLOR)
         {
             rs2_get_video_stream_intrinsics(prof, &intrinsics, &e);
             if (check_error(e) != 0) {
